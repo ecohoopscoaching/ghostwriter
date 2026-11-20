@@ -1,0 +1,56 @@
+@import "tailwindcss";
+@import "@fontsource-variable/archivo";
+@import "@fontsource-variable/jetbrains-mono";
+
+@theme {
+  --font-sans: "Archivo Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-background: #000000;
+  --color-surface: #0a0a0a;
+  --color-surface-elevated: #121212;
+  --color-border: #262626;
+  --color-border-strong: #52525b;
+  --color-silver: #c0c0c0;
+  --color-silver-dim: #71717a;
+  --color-silver-bright: #e4e4e7;
+  --color-foreground: #ffffff;
+}
+
+@layer base {
+  html {
+    background-color: #000000;
+    color: #ffffff;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: #000000;
+    color: #ffffff;
+  }
+
+  ::selection {
+    background-color: #ffffff;
+    color: #000000;
+  }
+}
+
+/* Subtle silver scrollbar for popovers and output textareas */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c0c0c0;
+}
