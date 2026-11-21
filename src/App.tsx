@@ -460,8 +460,10 @@ export function App() {
             >
               <span
                 className={cn(
-                  'h-1.5 w-1.5 rounded-full',
-                  hasGeminiKey ? 'bg-white' : 'bg-[#52525b]',
+                  'h-2 w-2 rounded-full transition-colors',
+                  hasGeminiKey
+                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.85)]'
+                    : 'bg-[#52525b]',
                 )}
               />
               <KeyRound className="h-3.5 w-3.5" />
