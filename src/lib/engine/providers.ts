@@ -120,13 +120,15 @@ export function buildLiveLlmPrompts(topic: string, spec: SoundSpec, feedback?: s
     : '';
 
   const techniquesLine = spec.techniques.length
-    ? `Advanced Craft Techniques to weave in naturally: ${spec.techniques
+    ? `Optional Advanced Craft Techniques to weave in naturally: ${spec.techniques
         .map((t) => `${t.label} (${t.description})`)
         .join('; ')}`
-    : 'Advanced Craft Focus: Prioritize motif mutation, object correlative, callback payoff, subtext, or refrain evolution so the song feels written rather than assembled.';
+    : '';
+
+  const resolvedTopic = topic.trim() || 'An original, emotionally specific scene fitting the mood and sound';
 
   const user = [
-    `Topic: ${topic}`,
+    `Topic: ${resolvedTopic}`,
     `Mode: ${spec.isRap ? `Rap (${spec.flowMode.label})` : 'R&B / Vocal (Melody, Vowels & Pocket)'}`,
     `Scene Rule: ${TOPIC_BIBLE_RULE} Formula: ${SONGWRITING_FORMULA}.`,
     perspectiveLine,

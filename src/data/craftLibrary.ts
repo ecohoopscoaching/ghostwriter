@@ -464,9 +464,12 @@ export const PERSPECTIVES: readonly SongPerspective[] = [
   },
 ];
 
+export const DEFAULT_PERSPECTIVE_ID = 'second-person';
+
 export function resolvePerspective(id?: string): SongPerspective | undefined {
-  if (!id || id === 'auto') return undefined;
-  return PERSPECTIVES.find((p) => p.id === id);
+  if (id === 'auto') return undefined;
+  const targetId = id || DEFAULT_PERSPECTIVE_ID;
+  return PERSPECTIVES.find((p) => p.id === targetId);
 }
 
 // ──────────────────────── 80 Storytelling Styles ────────────────────────

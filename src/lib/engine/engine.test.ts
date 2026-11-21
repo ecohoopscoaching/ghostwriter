@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { findBannedNames } from '@/data/bannedNames';
 import {
   ADVANCED_TECHNIQUES,
+  DEFAULT_PERSPECTIVE_ID,
   HIT_MAKING_CHECKLIST,
   HIT_SONG_QUESTIONS,
   PERSPECTIVES,
@@ -20,6 +21,7 @@ import {
   NON_SOUL_GLIDER_OPENER,
   VOICE_PRESETS,
 } from '@/data/voicePresets';
+import { createGeminiProvider } from './geminiProvider';
 import { buildSoundSpec, generateSong } from './generate';
 import { buildLiveLlmPrompts } from './providers';
 import { DEFAULT_TARGET, DISALLOWED_WORDING_RE, LIMITS, charCount } from './limits';
@@ -76,10 +78,16 @@ describe('Preset libraries & defaults', () => {
     }
   });
 
-  it('contains the Complete Rap & R&B Topic Bible (10 categories, 92 unique topics)', () => {
+  it('contains the Complete Rap & R&B Topic Bible (10 categories, 92 unique topics, 4+ specific scenes each)', () => {
     expect(TOPIC_CATEGORIES).toHaveLength(10);
     expect(TOPICS).toHaveLength(92);
     expect(new Set(TOPICS.map((t) => t.id)).size).toBe(92);
+    for (const t of TOPICS) {
+      expect(t.scenes.length, `${t.label} should have specific scenes`).toBeGreaterThanOrEqual(4);
+      for (const s of t.scenes) {
+        expect(s.trim().length).toBeGreaterThan(10);
+      }
+    }
   });
 
   it('supports Tempo dropdown presets, custom exact BPM values, and producer-inferred tempos', () => {
@@ -445,5 +453,101 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
     expect(rnbRes.lyrics).toContain('Restrained emotional release');
     expect(rnbRes.lyrics).toContain('Fuller release');
     expect(rnbRes.lyrics).toContain('Peak emotional release');
+  });
+
+  it('defaults Perspective to second-person ("you") and keeps storytelling & techniques optional', () => {
+    expect(DEFAULT_PERSPECTIVE_ID).toBe('second-person');
+    const spec = buildSoundSpec(
+      {
+        topic: 'Late night call',
+        moodId: DEFAULT_MOOD_ID,
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'p36',
+        voiceId: DEFAULT_VOICE_ID,
+        target: 'ace',
+      },
+      7,
+    );
+    expect(spec.perspective?.id).toBe('second-person');
+    expect(spec.storytellingStyles).toEqual([]);
+    expect(spec.techniques).toEqual([]);
+
+    const prompts = buildLiveLlmPrompts('Late night call', spec);
+    expect(prompts.user).toContain('Second person');
+    expect(prompts.user).not.toContain('Optional Advanced Craft Techniques');
+    expect(prompts.user).not.toContain('Storytelling Style');
+  });
+
+  it('createGeminiProvider sends rulebook prompt via x-goog-api-key and parses lyrics cleanly', async () => {
+    let capturedUrl = '';
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody = '';
+
+    const mockFetch: typeof fetch = async (input, init) => {
+      capturedUrl = String(input);
+      capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+      capturedBody = String(init?.body ?? '');
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                parts: [
+                  {
+                    text: '```\nTITLE: Porch Light\n\n[Intro: male]\nYou left the key inside the bowl\n\n[Chorus: male]\nDo you still feel it when the house goes cold?\n```',
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    };
+
+    const provider = createGeminiProvider({
+      apiKey: 'AIzaTestSecretKey123',
+      model: 'gemini-2.5-flash',
+      fetchImpl: mockFetch,
+    });
+
+    const spec = buildSoundSpec(
+      {
+        topic: 'Porch light left on',
+        moodId: DEFAULT_MOOD_ID,
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'p36',
+        voiceId: DEFAULT_VOICE_ID,
+        target: 'ace',
+      },
+      5,
+    );
+
+    const draft = await provider.generate({
+      topic: 'Porch light left on',
+      spec,
+      rng: { next: () => 0.5, int: (a) => a, pick: (arr) => arr[0], chance: () => false, shuffle: (a) => [...a] },
+    });
+
+    expect(capturedUrl).toContain('models/gemini-2.5-flash:generateContent');
+    expect(capturedUrl).not.toContain('AIzaTestSecretKey123');
+    expect(capturedHeaders['x-goog-api-key']).toBe('AIzaTestSecretKey123');
+    expect(capturedBody).toContain('THE R&B SONGWRITING RULEBOOK');
+    expect(draft.title).toBe('Porch Light');
+    expect(draft.lyrics).toContain('[Intro: male]');
+    expect(draft.lyrics).not.toContain('```');
+
+    const badProvider = createGeminiProvider({
+      apiKey: 'AIzaBadKey',
+      fetchImpl: async () => new Response(JSON.stringify({ error: { message: 'API key not valid' } }), { status: 400 }),
+    });
+    await expect(
+      badProvider.generate({
+        topic: 'Test',
+        spec,
+        rng: { next: () => 0.5, int: (a) => a, pick: (arr) => arr[0], chance: () => false, shuffle: (a) => [...a] },
+      }),
+    ).rejects.toThrow(/Gemini rejected the API key/);
   });
 });
