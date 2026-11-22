@@ -8,6 +8,7 @@ import {
   EyeOff,
   KeyRound,
   RefreshCw,
+  RotateCcw,
   SlidersHorizontal,
   X,
 } from 'lucide-react';
@@ -36,7 +37,7 @@ import {
   DEFAULT_PERSONA_ID,
   PERSONA_GROUPS,
   PRODUCER_PERSONAS,
-  getPersona,
+  findPersona,
   personaLabel,
 } from '@/data/producerPersonas';
 import {
@@ -49,7 +50,7 @@ import {
   DEFAULT_VOICE_ID,
   VOICE_GROUPS,
   VOICE_PRESETS,
-  getVoice,
+  findVoice,
 } from '@/data/voicePresets';
 import {
   GEMINI_MODELS,
@@ -68,7 +69,11 @@ import {
 import { validateAceLyrics, validateLyrics } from '@/lib/engine/lyrics';
 import { buildLiveLlmPrompts } from '@/lib/engine/providers';
 import { validateAceStyle, validateSoundPrompt } from '@/lib/engine/soundPrompt';
-import type { GenerationResult } from '@/lib/engine/types';
+import {
+  CREATION_MODE_LABELS,
+  resolveCreationMode,
+  type GenerationResult,
+} from '@/lib/engine/types';
 import { cn } from '@/lib/utils';
 
 const RANDOM_PRODUCER_ID = '__random__';
@@ -95,7 +100,7 @@ export function App() {
   const [geminiModel, setGeminiModel] = useState<GeminiModelId>(initialGemini.model);
   const [showKeyText, setShowKeyText] = useState(false);
 
-  const [producerError, setProducerError] = useState(false);
+  const [selectionHint, setSelectionHint] = useState(false);
   const [generateError, setGenerateError] = useState('');
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<GenerationResult | null>(null);
@@ -111,18 +116,18 @@ export function App() {
 
   const selectedMood = getMood(moodId);
   const selectedTempo = resolveTempo(tempoId);
-  const selectedVoice = getVoice(voiceId);
-  const selectedPersona = personaId ? getPersona(personaId) : null;
+  const selectedVoice = findVoice(voiceId) ?? null;
+  const selectedPersona = findPersona(personaId) ?? null;
+  const creationMode = resolveCreationMode(selectedPersona?.id, selectedVoice?.id);
+  const creationModeLabel = CREATION_MODE_LABELS[creationMode];
+
   const selectedPerspective = resolvePerspective(perspectiveId);
   const selectedStorytelling = resolveStorytellingStyles(storytellingIds);
   const selectedTechniques = resolveTechniques(techniqueIds);
   const selectedFlowMode = getFlowMode(flowModeId);
-  const isRapSelection =
-    selectedVoice.category === 'rap' ||
-    (selectedPersona
-      ? /\b(rap|boom-bap|trap)\b/i.test(selectedPersona.sound.dna) &&
-        !/\br&b\b/i.test(selectedPersona.sound.dna)
-      : false);
+
+  // Artist owns vocal identity; Producer NEVER turns a singer into a rapper.
+  const isRapSelection = selectedVoice?.category === 'rap';
 
   const customOptionCount = useMemo(() => {
     let count = 0;
@@ -253,28 +258,60 @@ export function App() {
     [],
   );
 
-  // Always validate against the active target so switching ACE <-> Flow updates caps live
+  // Live validation always matches exact submission validation for target + creationMode
   const lyricsValidation = useMemo(() => {
-    const g = result?.spec.gender ?? selectedVoice.gender;
+    const g = selectedVoice?.gender;
     return target === 'ace'
-      ? validateAceLyrics(lyricsText, g, TARGETS.ace.lyricsMax)
-      : validateLyrics(lyricsText, TARGETS.flow.lyricsMax);
-  }, [lyricsText, result, target, selectedVoice.gender]);
+      ? validateAceLyrics(lyricsText, g, TARGETS.ace.lyricsMax, creationMode)
+      : validateLyrics(lyricsText, TARGETS.flow.lyricsMax, creationMode);
+  }, [lyricsText, target, selectedVoice?.gender, creationMode]);
 
   const soundValidation = useMemo(() => {
     return target === 'ace'
-      ? validateAceStyle(soundText, TARGETS.ace.styleMax)
-      : validateSoundPrompt(soundText, TARGETS.flow.styleMax);
-  }, [soundText, target]);
+      ? validateAceStyle(soundText, TARGETS.ace.styleMax, creationMode)
+      : validateSoundPrompt(soundText, TARGETS.flow.styleMax, creationMode);
+  }, [soundText, target, creationMode]);
+
+  const clearGeneratedOutput = () => {
+    setResult(null);
+    setLyricsText('');
+    setSoundText('');
+    setShowAudit(false);
+    setGenerateError('');
+  };
+
+  const handleSelectVoice = (id: string) => {
+    setSelectionHint(false);
+    setGenerateError('');
+    const nextMode = resolveCreationMode(personaId, id);
+    if (result && (result.spec.mode !== nextMode || result.spec.voice?.id !== id)) {
+      clearGeneratedOutput();
+    }
+    setVoiceId(id);
+  };
+
+  const handleClearVoice = () => {
+    setVoiceId('');
+    clearGeneratedOutput();
+  };
 
   const handleSelectPersona = (id: string) => {
-    setProducerError(false);
-    if (id === RANDOM_PRODUCER_ID) {
-      const random = PRODUCER_PERSONAS[Math.floor(Math.random() * PRODUCER_PERSONAS.length)];
-      setPersonaId(random.id);
-      return;
+    setSelectionHint(false);
+    setGenerateError('');
+    const resolvedId =
+      id === RANDOM_PRODUCER_ID
+        ? PRODUCER_PERSONAS[Math.floor(Math.random() * PRODUCER_PERSONAS.length)].id
+        : id;
+    const nextMode = resolveCreationMode(resolvedId, voiceId);
+    if (result && (result.spec.mode !== nextMode || result.spec.persona?.id !== resolvedId)) {
+      clearGeneratedOutput();
     }
-    setPersonaId(id);
+    setPersonaId(resolvedId);
+  };
+
+  const handleClearPersona = () => {
+    setPersonaId('');
+    clearGeneratedOutput();
   };
 
   const handleToggleStorytelling = (id: string) => {
@@ -302,6 +339,26 @@ export function App() {
     setFlowModeId(DEFAULT_FLOW_MODE_ID);
   };
 
+  const canReset = Boolean(
+    topic.trim() ||
+      voiceId ||
+      personaId ||
+      customOptionCount > 0 ||
+      result ||
+      lyricsText.trim() ||
+      soundText.trim(),
+  );
+
+  const handleResetAll = () => {
+    setTopic('');
+    setVoiceId(DEFAULT_VOICE_ID);
+    setPersonaId(DEFAULT_PERSONA_ID);
+    handleResetOptions();
+    setSelectionHint(false);
+    setShowOptions(false);
+    clearGeneratedOutput();
+  };
+
   const handleSaveGemini = () => {
     const trimmed = geminiKeyDraft.trim();
     setGeminiApiKey(trimmed);
@@ -324,7 +381,7 @@ export function App() {
   };
 
   const handleCopyLlmPrompt = async () => {
-    if (!result) return;
+    if (!result || result.spec.mode === 'instrumental' || result.spec.mode === 'none') return;
     const { system, user } = buildLiveLlmPrompts(topic || result.title, result.spec);
     const combined = `SYSTEM:\n${system}\n\nUSER:\n${user}`;
     try {
@@ -341,18 +398,21 @@ export function App() {
     window.setTimeout(() => setPromptCopied(false), 1800);
   };
 
-  const handleGenerate = async () => {
-    if (!personaId) {
-      setProducerError(true);
+  const handleGenerate = async (forceOffline = false) => {
+    if (creationMode === 'none') {
+      setSelectionHint(true);
+      clearGeneratedOutput();
       return;
     }
-    setProducerError(false);
+    setSelectionHint(false);
     setGenerateError('');
     setGenerating(true);
     try {
-      const provider = hasGeminiKey
-        ? createGeminiProvider({ apiKey: geminiApiKey, model: geminiModel })
-        : undefined;
+      const needsVocals = creationMode === 'full' || creationMode === 'acappella';
+      const provider =
+        !forceOffline && needsVocals && hasGeminiKey
+          ? createGeminiProvider({ apiKey: geminiApiKey, model: geminiModel })
+          : undefined;
 
       const next = await generateSong(
         {
@@ -372,12 +432,13 @@ export function App() {
       setResult(next);
       setLyricsText(next.lyrics);
       setSoundText(next.soundPrompt);
+      if (next.spec.mode === 'instrumental') setShowAudit(false);
       window.requestAnimationFrame(() => {
         outputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     } catch (err) {
       setGenerateError(
-        err instanceof Error ? err.message : 'Something went wrong while generating lyrics.',
+        err instanceof Error ? err.message : 'Something went wrong while generating.',
       );
     } finally {
       setGenerating(false);
@@ -387,23 +448,66 @@ export function App() {
   const activeGeminiLabel =
     GEMINI_MODELS.find((m) => m.id === geminiModel)?.label ?? 'Gemini';
 
+  const generateButtonLabel = useMemo(() => {
+    if (creationMode === 'instrumental') return 'Generate Instrumental';
+    if (creationMode === 'acappella') return 'Generate A Cappella';
+    return 'Generate';
+  }, [creationMode]);
+
   const lyricsMeta = useMemo(() => {
-    if (!result) {
-      return `${formatCount(activeTarget.lyricsMax)} char max`;
-    }
-    const parts = [personaLabel(result.spec.persona), result.spec.mood.label];
-    if (target === 'ace') {
+    if (creationMode === 'none') return 'Select an Artist or Producer above';
+    if (creationMode === 'instrumental') return 'Instrumental only · no vocal lyrics';
+    if (!result) return `${formatCount(activeTarget.lyricsMax)} char max · cold open at Verse 1`;
+    const parts: string[] = [];
+    if (result.spec.persona) parts.push(personaLabel(result.spec.persona));
+    if (result.spec.mode === 'acappella') parts.push('A Cappella');
+    parts.push(result.spec.mood.label);
+    if (target === 'ace' && result.spec.gender) {
       parts.push(`${result.spec.gender} vocal tags`);
     }
     return parts.join(' · ');
-  }, [result, target, activeTarget.lyricsMax]);
+  }, [result, creationMode, target, activeTarget.lyricsMax]);
 
   const soundMeta = useMemo(() => {
-    if (!result) {
-      return `${formatCount(activeTarget.styleMax)} char max`;
+    if (creationMode === 'none') return `${formatCount(activeTarget.styleMax)} char max`;
+    if (!result) return `${creationModeLabel} · ${formatCount(activeTarget.styleMax)} char max`;
+    const parts: string[] = [CREATION_MODE_LABELS[result.spec.mode]];
+    if (result.spec.bpm) {
+      parts.push(
+        `${result.spec.bpm}${result.spec.switchBpm ? ` → ${result.spec.switchBpm}` : ''} BPM`,
+      );
     }
-    return `${result.spec.bpm}${result.spec.switchBpm ? ` → ${result.spec.switchBpm}` : ''} BPM · ${result.spec.key} · ${result.spec.voice.name}`;
-  }, [result, activeTarget.styleMax]);
+    if (result.spec.key) parts.push(result.spec.key);
+    if (result.spec.voice) parts.push(result.spec.voice.name);
+    if (result.spec.persona) parts.push(personaLabel(result.spec.persona));
+    return parts.join(' · ');
+  }, [result, creationMode, creationModeLabel, activeTarget.styleMax]);
+
+  const lyricsPlaceholder = useMemo(() => {
+    if (creationMode === 'none') {
+      return 'Pick Artist + Producer for a Full Song, or Artist only for A Cappella…';
+    }
+    if (creationMode === 'instrumental') {
+      return 'Instrumental mode — no vocal lyrics are generated.';
+    }
+    if (target === 'ace') {
+      return `[Verse 1: ${selectedVoice?.gender ?? 'male'}]\nCold open — lyrics start straight on Verse 1…`;
+    }
+    return '[Verse 1]\nCold open — lyrics start straight on Verse 1…';
+  }, [creationMode, target, selectedVoice?.gender]);
+
+  const soundPlaceholder = useMemo(() => {
+    if (creationMode === 'none') {
+      return 'No selection yet. Choose Artist + Producer (Full Song), Producer only (Instrumental), or Artist only (A Cappella).';
+    }
+    if (creationMode === 'instrumental') {
+      return `Instrumental-only ${activeTarget.styleHeading.toLowerCase()} (no vocals) appears here…`;
+    }
+    if (creationMode === 'acappella') {
+      return `Unaccompanied a cappella ${activeTarget.styleHeading.toLowerCase()} (no instruments) appears here…`;
+    }
+    return `Matching ${activeTarget.styleHeading.toLowerCase()} appears here…`;
+  }, [creationMode, activeTarget.styleHeading]);
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -468,6 +572,24 @@ export function App() {
               />
               <KeyRound className="h-3.5 w-3.5" />
               {hasGeminiKey ? 'Gemini On' : 'Gemini Key'}
+            </button>
+
+            {/* Full song reset button (keeps saved Gemini key intact) */}
+            <button
+              type="button"
+              onClick={handleResetAll}
+              disabled={!canReset}
+              aria-label="Reset song"
+              title="Reset topic, selections, options, and output"
+              className={cn(
+                'inline-flex items-center gap-1.5 border px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] transition-colors',
+                canReset
+                  ? 'border-[#262626] bg-[#0a0a0a] text-[#a1a1aa] hover:border-white hover:text-white cursor-pointer'
+                  : 'border-[#1c1c1e] bg-black text-[#3f3f46] cursor-not-allowed',
+              )}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset
             </button>
           </div>
         </header>
@@ -588,44 +710,68 @@ export function App() {
           />
         </section>
 
-        {/* Step 2: Artist & Producer (only 2 core pickers visible) */}
-        <section className="grid grid-cols-1 gap-5 pb-8 sm:grid-cols-2">
-          <Picker
-            label="Artist (vocals)"
-            value={voiceId}
-            displayValue={selectedVoice.name}
-            displaySublabel={selectedVoice.note}
-            options={voiceOptions}
-            groups={VOICE_GROUPS}
-            searchable
-            searchPlaceholder="Search vocalists…"
-            prominent
-            onSelect={setVoiceId}
-          />
-          <div>
+        {/* Step 2: Independently Optional Artist & Producer + Live Creation Mode Badge */}
+        <section className="pb-8">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-[#71717a]">
+              Mode
+            </span>
+            <span
+              data-testid="creation-mode-badge"
+              className={cn(
+                'border px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-[0.16em]',
+                creationMode === 'none'
+                  ? 'border-[#262626] text-[#71717a]'
+                  : 'border-[#3f3f46] bg-[#0a0a0a] text-white',
+              )}
+            >
+              {creationModeLabel}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <Picker
+              label="Artist (vocals)"
+              value={voiceId}
+              displayValue={selectedVoice ? selectedVoice.name : 'No artist selected'}
+              displaySublabel={
+                selectedVoice ? selectedVoice.note : 'Optional · owns voice, flow & delivery'
+              }
+              options={voiceOptions}
+              groups={VOICE_GROUPS}
+              searchable
+              searchPlaceholder="Search vocalists…"
+              prominent
+              isPlaceholder={!selectedVoice}
+              highlightError={selectionHint}
+              onSelect={handleSelectVoice}
+              onClear={handleClearVoice}
+            />
             <Picker
               label="Producer (sound)"
               value={personaId}
-              displayValue={selectedPersona ? personaLabel(selectedPersona) : 'Select a producer…'}
+              displayValue={selectedPersona ? personaLabel(selectedPersona) : 'No producer selected'}
               displaySublabel={
                 selectedPersona
                   ? (selectedPersona.tagline ?? selectedPersona.sound.dna)
-                  : 'Sets genre & production'
+                  : 'Optional · owns genre, beat & production'
               }
               options={personaOptions}
               groups={personaGroups}
               searchPlaceholder="Search producers…"
               prominent
               isPlaceholder={!selectedPersona}
-              highlightError={producerError}
+              highlightError={selectionHint}
               onSelect={handleSelectPersona}
+              onClear={handleClearPersona}
             />
-            {producerError && (
-              <p className="mt-2 font-mono text-xs text-white">
-                Pick a producer first.
-              </p>
-            )}
           </div>
+
+          {selectionHint && creationMode === 'none' && (
+            <p className="mt-3 font-mono text-xs text-[#c0c0c0]">
+              Pick Artist + Producer (Full Song), Producer only (Instrumental), or Artist only (A Cappella).
+            </p>
+          )}
         </section>
 
         {/* Collapsible More Options (collapsed by default for ADHD focus) */}
@@ -750,30 +896,41 @@ export function App() {
             type="button"
             variant="primary"
             size="lg"
-            onClick={handleGenerate}
-            disabled={generating}
+            onClick={() => handleGenerate(false)}
+            disabled={generating || creationMode === 'none'}
             className="w-full tracking-[0.22em]"
           >
             {generating ? (
               <>
                 <RefreshCw className="h-5 w-5 animate-spin" />
-                {hasGeminiKey ? `Writing with ${activeGeminiLabel}` : 'Generating'}
+                {hasGeminiKey && creationMode !== 'instrumental'
+                  ? `Writing with ${activeGeminiLabel}`
+                  : 'Generating'}
               </>
             ) : (
-              'Generate'
+              generateButtonLabel
             )}
           </Button>
 
           {generateError && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border border-[#3f3f46] bg-[#0a0a0a] px-4 py-3 font-mono text-xs text-white">
               <span>{generateError}</span>
-              <button
-                type="button"
-                onClick={() => setShowGeminiPanel(true)}
-                className="underline underline-offset-4 text-[#c0c0c0] hover:text-white cursor-pointer"
-              >
-                Check Gemini Key
-              </button>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => handleGenerate(true)}
+                  className="underline underline-offset-4 text-white hover:text-[#c0c0c0] cursor-pointer"
+                >
+                  Generate Offline
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiPanel(true)}
+                  className="underline underline-offset-4 text-[#c0c0c0] hover:text-white cursor-pointer"
+                >
+                  Check Gemini Key
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -783,46 +940,48 @@ export function App() {
           {result && (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-[#71717a]">
-                {result.report.engine} · {activeTarget.name}
+                {result.report.engine} · {CREATION_MODE_LABELS[result.spec.mode]} · {activeTarget.name}
               </span>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCopyLlmPrompt}
-                  className="inline-flex items-center gap-1.5 border border-[#262626] px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#a1a1aa] transition-colors hover:border-white hover:text-white cursor-pointer"
-                >
-                  {promptCopied ? (
-                    <>
-                      <Check className="h-3 w-3 text-white" />
-                      Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-3 w-3" />
-                      Copy Prompt
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowAudit((v) => !v)}
-                  aria-expanded={showAudit}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 border px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] transition-colors cursor-pointer',
-                    showAudit
-                      ? 'border-white bg-white text-black'
-                      : 'border-[#262626] text-[#a1a1aa] hover:border-white hover:text-white',
-                  )}
-                >
-                  <ClipboardCheck className="h-3 w-3" />
-                  Audit
-                </button>
-              </div>
+              {result.spec.mode !== 'instrumental' && result.spec.mode !== 'none' && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyLlmPrompt}
+                    className="inline-flex items-center gap-1.5 border border-[#262626] px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-[#a1a1aa] transition-colors hover:border-white hover:text-white cursor-pointer"
+                  >
+                    {promptCopied ? (
+                      <>
+                        <Check className="h-3 w-3 text-white" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" />
+                        Copy Prompt
+                      </>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAudit((v) => !v)}
+                    aria-expanded={showAudit}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 border px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-[0.16em] transition-colors cursor-pointer',
+                      showAudit
+                        ? 'border-white bg-white text-black'
+                        : 'border-[#262626] text-[#a1a1aa] hover:border-white hover:text-white',
+                    )}
+                  >
+                    <ClipboardCheck className="h-3 w-3" />
+                    Audit
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {result && showAudit && (
+          {result && showAudit && result.spec.mode !== 'instrumental' && (
             <CraftAuditPanel
               lyrics={lyricsText}
               title={result.title}
@@ -833,18 +992,22 @@ export function App() {
           <OutputPanel
             index="01"
             heading="LYRICS"
-            title={result?.title}
+            title={result?.title || undefined}
             meta={lyricsMeta}
             value={lyricsText}
-            placeholder={
-              target === 'ace'
-                ? `[Intro: ${selectedVoice.gender}]\nLyrics appear here…`
-                : '[Intro]\nLyrics appear here…'
-            }
+            placeholder={lyricsPlaceholder}
             onChange={setLyricsText}
             validation={lyricsValidation}
             copyLabel="Copy Lyrics"
-            minRows={result ? (target === 'ace' ? 24 : 18) : 12}
+            minRows={
+              creationMode === 'instrumental' || creationMode === 'none'
+                ? 4
+                : result
+                  ? target === 'ace'
+                    ? 24
+                    : 18
+                  : 12
+            }
           />
 
           <OutputPanel
@@ -852,7 +1015,7 @@ export function App() {
             heading={activeTarget.styleHeading}
             meta={soundMeta}
             value={soundText}
-            placeholder={`Matching ${activeTarget.styleHeading.toLowerCase()} appears here…`}
+            placeholder={soundPlaceholder}
             onChange={setSoundText}
             validation={soundValidation}
             copyLabel={activeTarget.styleCopyLabel}

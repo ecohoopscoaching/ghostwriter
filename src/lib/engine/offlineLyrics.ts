@@ -1,15 +1,20 @@
 /**
- * Built-in offline song lyric writer.
+ * Built-in offline song lyric writer (used when no live LLM API key is configured).
  *
- * Produces complete, structured original songs tailored to the user's topic,
- * genre, mood, artist writing style, producer feel, and voice preset — with
- * simple section labels and short bracketed vocal cues. Every seed rolls a
- * fresh combination of title, imagery, verse frames, hook cadence, and bridge.
+ * Rules enforced at the source:
+ *   - Global Cold-Open Rule: every vocal song opens directly at [Verse 1] (or [Verse 1: male|female]).
+ *     Zero vocal intros, zero opening ad-libs ("yeah", "listen", "mmm"), zero title chants.
+ *   - Artist / Producer Independence: vocal delivery cues come strictly from the selected Artist
+ *     (never turning an R&B singer into a rapper over a hip-hop beat, or vice versa).
+ *   - Four Creation Modes: returns empty lyrics for 'instrumental' and 'none'; uses purely vocal
+ *     directions with zero instrument cues in 'acappella' mode.
+ *   - Natural Writing: the topic inspires the title and mood without mechanically stuffing the
+ *     title string into unrelated lines.
  */
 import type { Palette } from '@/data/moods';
-import type { Rng } from './rng';
 import type { Section } from './lyrics';
 import { serialize } from './lyrics';
+import type { Rng } from './rng';
 import type { SoundSpec } from './types';
 
 interface ImageryBank {
@@ -18,6 +23,15 @@ interface ImageryBank {
   anchors: string[];
   turns: string[];
   outros: string[];
+  naturalTitles: string[];
+  hook: {
+    question: string;
+    echo: string;
+    statement: string;
+    bridgeQuestion: string;
+    followUpQuestions: [string, string, string];
+    followUpStatements: [string, string, string];
+  };
 }
 
 const BANKS: Record<Palette, ImageryBank> = {
@@ -33,7 +47,7 @@ const BANKS: Record<Palette, ImageryBank> = {
     details: [
       'I still reach for my phone before I remember the silence',
       'Every corner of this house still echoes the way you laugh',
-      'I folded up the promises and left them on the shelf',
+      'You folded up the promises and left them on the shelf',
       'Funny how a memory can weigh more than the truth',
       'We traded all our patience for a pride we could not hold',
       'Your name sits on my tongue like a song I should not sing',
@@ -53,13 +67,30 @@ const BANKS: Record<Palette, ImageryBank> = {
     outros: [
       'Leave the porch light burning low',
       'I will carry what we knew',
-      'Let the last note fade to black',
-      'Still standing in the quiet',
+      'Let the last note fade to quiet',
+      'Still standing in the stillness',
     ],
+    naturalTitles: ['Hallway Light', 'Still Unsaid', 'After the Silence', 'Left on the Shelf'],
+    hook: {
+      question: 'Do you still hear it when the house goes quiet',
+      echo: 'house goes quiet',
+      statement: 'I finally breathe when the house goes quiet',
+      bridgeQuestion: 'When did holding on start costing more than letting go?',
+      followUpQuestions: [
+        'Do you still reach across the dark at two a.m.?',
+        'Do you still catch my name inside an empty room?',
+        'Did you ever plan to turn around and look?',
+      ],
+      followUpStatements: [
+        'No longer reaching through the dark at two a.m.',
+        'I made my peace inside this quiet room',
+        'I set the weight down where we used to stand',
+      ],
+    },
   },
   fire: {
     settings: [
-      'Check the scoreboard now, remember how they counted me out',
+      'Check the scoreboard now, remember how they counted you out',
       'Built this from the concrete with my back against the wall',
       'Came up through the static when nobody called my name',
       'Heavy on the shoulders but I never dropped the crown',
@@ -71,7 +102,7 @@ const BANKS: Record<Palette, ImageryBank> = {
       'I kept my circle small and let the work do all the talk',
       'Scars across the knuckles just remind me where I stood',
       'No favors on the ledger, every inch was paid in full',
-      'Turned the doubt into a drumbeat that keeps driving through the floor',
+      'Turned the doubt into a pulse that keeps driving through the floor',
       'Now the room goes quiet soon as we step through the frame',
     ],
     anchors: [
@@ -81,31 +112,48 @@ const BANKS: Record<Palette, ImageryBank> = {
       'Stand tall in the smoke and let the whole block hear it ring',
     ],
     turns: [
-      'Put your hands up if you made it out the deep end',
+      'Remember every night you swore you could not make it through',
       'I owe nothing to the shadows that tried holding me down',
       'When the pressure hits the ceiling, watch us raise the roof',
       'This is not luck, this is patience meeting thunder',
     ],
     outros: [
-      'Let the drums ride out',
       'Still standing, still here',
-      'Say it one more time for the ones who kept the faith',
-      'Crown heavy, head high',
+      'Every mile was paid in full',
+      'Built from the fire, built to last',
+      'Crown steady, head high',
     ],
+    naturalTitles: ['Paid in Full', 'Built in the Fire', 'Through the Static', 'Miles in the Rain'],
+    hook: {
+      question: 'Did you think the fire was supposed to stop me',
+      echo: 'supposed to stop me',
+      statement: 'Nothing in the fire could ever stop me',
+      bridgeQuestion: 'Who would we be if the climb had been easy?',
+      followUpQuestions: [
+        'Every closed door when we still kept moving?',
+        'Every cold night when nobody answered?',
+        'Did you forget how we built this from nothing?',
+      ],
+      followUpStatements: [
+        'Every closed door only sharpened the vision',
+        'Every cold night built the voice you hear now',
+        'We turned the pressure into something permanent',
+      ],
+    },
   },
   glow: {
     settings: [
       'Golden hour spilling slow across your shoulders in the room',
       'Windows rolled down, warm wind moving through the avenue',
-      'Candlelight dancing on the glass while the record spins',
+      'Candlelight dancing on the glass while the evening slows',
       'Morning sun breaking soft across the edge of the bed',
       'City lights shimmering like water underneath our feet',
-      'Slow dance in the kitchen with no music but your pulse',
+      'Slow dance in the kitchen with no hurry in your pulse',
     ],
     details: [
       'Every time you look at me the static fades away',
       'You pull me from the noise into a place that feels like home',
-      'No need to rush the clock when every second tastes like this',
+      'No need to rush the clock when every second feels like this',
       'Your hand inside my hand is all the proof I ever need',
       'We found a little heaven in the middle of the week',
       'The way you say my name makes the whole room come alive',
@@ -118,23 +166,40 @@ const BANKS: Record<Palette, ImageryBank> = {
     ],
     turns: [
       'Let the whole world spin outside, we do not need to move',
-      'If this is what forever feels like, pour another round',
-      'Take a breath and lean in closer, let the melody hold us',
+      'If this is what forever feels like, stay a little longer',
+      'Take a breath and lean in closer, let the moment hold us',
       'Every road I ever walked was leading straight to you',
     ],
     outros: [
       'Hold me in the afterglow',
-      'Right here, right now',
-      'Slow fade in the warm light',
+      'Right here in the warm light',
       'Stay close till the morning',
+      'Nowhere else I need to be',
     ],
+    naturalTitles: ['Golden Hour', 'In This Light', 'Middle of the Week', 'Afterglow'],
+    hook: {
+      question: 'Do you feel how the whole room slows down with you',
+      echo: 'slows down with you',
+      statement: 'The whole world slows down right here with you',
+      bridgeQuestion: 'How did we find peace in the middle of the noise?',
+      followUpQuestions: [
+        'When your hand stays warm against my shoulder?',
+        'When the sunlight hits the kitchen floor?',
+        'Could we stay right here a little longer?',
+      ],
+      followUpStatements: [
+        'Your hand stays warm against my shoulder',
+        'Sunlight resting on the kitchen floor',
+        'We do not have to chase tomorrow anymore',
+      ],
+    },
   },
   shadow: {
     settings: [
       'Midnight on the avenue, the engine humming low in neutral',
       'Fog rolling off the river, neon reflecting off the chrome',
       'No witnesses, no alibi, just shadows on the glass',
-      'Tinted windows up while the bass shakes through the frame',
+      'Tinted windows up while the city blurs past the frame',
       'Cold air on the rooftop, watching headlights crawl below',
       'Three a.m. confession with the curtains pulled tight',
     ],
@@ -150,7 +215,7 @@ const BANKS: Record<Palette, ImageryBank> = {
       'Silence speaks louder when the stakes are this high',
       'You learn to move smart when the night has teeth',
       'Keep your cards close and let them guess the next move',
-      'Cold blood, steady hand, never flinching in the glare',
+      'Steady hand, clear eyes, never flinching in the glare',
     ],
     turns: [
       'Turn the lights down low so we can see who stays loyal',
@@ -164,12 +229,28 @@ const BANKS: Record<Palette, ImageryBank> = {
       'Keep it quiet when we leave',
       'Cold air, clear mind',
     ],
+    naturalTitles: ['Velvet Curtain', 'Midnight Avenue', 'Between the Lines', 'Cold Air'],
+    hook: {
+      question: 'Who stays loyal when the lights go low',
+      echo: 'lights go low',
+      statement: 'Now I know who stays when the lights go low',
+      bridgeQuestion: 'When did watching every corner become second nature?',
+      followUpQuestions: [
+        'When the smiles in the front row start to fade?',
+        'When the silence says more than anybody admits?',
+        'Who still answers when there is nothing left to gain?',
+      ],
+      followUpStatements: [
+        'Watched the smiles in the front row fade away',
+        'Learned to trust the quiet over polished words',
+        'Keeping only what is real inside the circle now',
+      ],
+    },
   },
 };
 
 function cleanTopic(raw: string): string {
-  const t = raw.trim().replace(/\s+/g, ' ');
-  return t || 'midnight confessions';
+  return raw.trim().replace(/\s+/g, ' ');
 }
 
 function titleCase(s: string): string {
@@ -184,26 +265,21 @@ function titleCase(s: string): string {
     .join(' ');
 }
 
-function makeTitle(topic: string, rng: Rng): string {
+function makeTitle(topic: string, bank: ImageryBank, rng: Rng): string {
+  if (!topic) return rng.pick(bank.naturalTitles);
   const words = topic
     .replace(/[^a-zA-Z0-9\s'-]/g, '')
     .split(/\s+/)
     .filter(Boolean);
-  if (words.length <= 4 && words.length > 0) {
+  // Short, clean topics make good natural titles; long scene prompts use a clean thematic title
+  // instead of awkwardly truncating the first 3 words.
+  if (words.length >= 1 && words.length <= 4) {
     return titleCase(words.join(' '));
   }
-  const core = words.slice(0, 3).join(' ');
-  const frames = [
-    () => titleCase(core),
-    () => titleCase(`${core} Tonight`),
-    () => titleCase(`After ${core}`),
-    () => titleCase(`Still ${core}`),
-  ];
-  return rng.pick(frames)();
+  return rng.pick(bank.naturalTitles);
 }
 
-function voiceCues(spec: SoundSpec, rng: Rng): {
-  intro: string;
+function voiceCues(spec: SoundSpec): {
   verse1: string;
   pre: string;
   chorus: string;
@@ -212,25 +288,33 @@ function voiceCues(spec: SoundSpec, rng: Rng): {
   finalChorus: string;
   outro: string;
 } {
-  const vid = spec.voice.id;
-  const isRap = spec.isRap;
-
-  if (isRap) {
+  const voice = spec.voice;
+  if (!voice) {
     return {
-      intro: rng.pick(['[low, spoken]', '[dry, close mic]']),
-      verse1: spec.flowMode.verse1Cue,
-      pre: '[build tension]',
-      chorus: spec.voice.gender === 'female' ? '[full mixed voice]' : '[strong hook, forward]',
-      verse2: spec.flowMode.verse2Cue,
+      verse1: '[close, steady]',
+      pre: '[gentle lift]',
+      chorus: '[open, clear]',
+      verse2: '[grounded, focused]',
       bridge: '[stripped back, raw]',
-      finalChorus: '[full voice, layered]',
-      outro: '[spoken, fade out]',
+      finalChorus: '[full voice, peak]',
+      outro: '[soft, breath]',
     };
   }
 
-  if (spec.voice.category === 'tenor') {
+  if (spec.isRap) {
     return {
-      intro: '[soft, warm low]',
+      verse1: spec.flowMode.verse1Cue,
+      pre: '[tighten cadence]',
+      chorus: '[strong hook, forward]',
+      verse2: spec.flowMode.verse2Cue,
+      bridge: '[stripped back, raw]',
+      finalChorus: '[full energy, emphatic]',
+      outro: '[low, deliberate]',
+    };
+  }
+
+  if (voice.category === 'tenor') {
+    return {
       verse1: '[close, conversational]',
       pre: '[lift into mix]',
       chorus: '[bright mask, full]',
@@ -240,9 +324,8 @@ function voiceCues(spec: SoundSpec, rng: Rng): {
       outro: '[soft falsetto, breath]',
     };
   }
-  if (spec.voice.category === 'baritone') {
+  if (voice.category === 'baritone') {
     return {
-      intro: '[deep baritone, low]',
       verse1: '[warm, close mic]',
       pre: '[smooth rise, mix]',
       chorus: '[rich chest, forward]',
@@ -252,9 +335,8 @@ function voiceCues(spec: SoundSpec, rng: Rng): {
       outro: '[low baritone, fade]',
     };
   }
-  if (vid === 'voc-fem-4') {
+  if (voice.id === 'voc-fem-4') {
     return {
-      intro: '[low, warm, even]',
       verse1: '[smooth mixed voice]',
       pre: '[connected rise]',
       chorus: '[full mix, seamless]',
@@ -265,7 +347,6 @@ function voiceCues(spec: SoundSpec, rng: Rng): {
     };
   }
   return {
-    intro: '[warm low, intimate]',
     verse1: '[low anchor, rhythmic]',
     pre: '[agile lift]',
     chorus: '[ringing head voice]',
@@ -276,16 +357,23 @@ function voiceCues(spec: SoundSpec, rng: Rng): {
   };
 }
 
+/**
+ * Generates a Flow / Mozart format offline song.
+ * Cold-opens directly at [Verse 1] (zero vocal intro, zero mechanical title stuffing).
+ */
 export function generateOfflineSong(
   topicRaw: string,
   spec: SoundSpec,
   rng: Rng,
 ): { title: string; lyrics: string } {
+  if (spec.mode === 'instrumental' || spec.mode === 'none' || !spec.voice) {
+    return { title: '', lyrics: '' };
+  }
+
   const topic = cleanTopic(topicRaw);
-  const topicLower = topic.toLowerCase();
-  const title = makeTitle(topic, rng);
   const bank = BANKS[spec.mood.palette];
-  const cues = voiceCues(spec, rng);
+  const title = makeTitle(topic, bank, rng);
+  const cues = voiceCues(spec);
 
   const settings = rng.shuffle(bank.settings);
   const details = rng.shuffle(bank.details);
@@ -293,42 +381,40 @@ export function generateOfflineSong(
   const turns = rng.shuffle(bank.turns);
   const outros = rng.shuffle(bank.outros);
 
-  const isSoulSwitch = spec.persona.id === 'soulswitch';
-
   const chorusLines = [
-    `All about ${topicLower}, feel it running through the night`,
+    `${bank.hook.question}?`,
     anchors[0],
-    `Hold onto ${topicLower}, do not let it slip from sight`,
+    bank.hook.followUpQuestions[0],
     anchors[1] ?? anchors[0],
   ];
 
+  const finalChorusLines = [
+    bank.hook.statement,
+    bank.hook.followUpStatements[0],
+    anchors[0],
+    bank.hook.followUpStatements[2],
+  ];
+
+  const isSoulSwitch = spec.mode === 'full' && spec.persona?.id === 'soulswitch';
+
   const sections: Section[] = [
-    {
-      label: '[Intro]',
-      lines: [
-        cues.intro,
-        `Yeah, thinking about ${topicLower}`,
-        `${outros[0]}`,
-      ],
-    },
     {
       label: '[Verse 1]',
       lines: [
         cues.verse1,
         settings[0],
-        `Still got ${topicLower} sitting heavy on my mind`,
         details[0],
         details[1],
         settings[1],
-        `Trying to put the pieces of ${topicLower} in line`,
+        details[2],
       ],
     },
     {
       label: '[Pre-Chorus]',
       lines: [
         cues.pre,
-        `Can you feel the room shift when the truth comes out`,
-        `No more running from ${topicLower}, hear me now`,
+        'You can feel the room shift when the truth comes out',
+        'No more hiding what the quiet already knows',
       ],
     },
     {
@@ -340,19 +426,18 @@ export function generateOfflineSong(
       lines: [
         isSoulSwitch ? '[beat switch, sharp]' : cues.verse2,
         settings[2],
-        details[2],
-        `Every mile we traveled brought ${topicLower} back around`,
         details[3],
+        details[4],
         settings[3],
-        `Now we say it out loud, no holding back the sound`,
+        details[5],
       ],
     },
     {
       label: '[Pre-Chorus]',
       lines: [
         cues.pre,
-        `Can you feel the room shift when the truth comes out`,
-        `No more running from ${topicLower}, hear me now`,
+        'You can feel the room shift when the truth comes out',
+        'Say it clear while the moment is still here',
       ],
     },
     {
@@ -364,20 +449,20 @@ export function generateOfflineSong(
       lines: [
         cues.bridge,
         turns[0],
-        `Even when the walls shake, ${topicLower} stays true`,
+        bank.hook.bridgeQuestion,
         turns[1] ?? turns[0],
         anchors[2] ?? anchors[0],
       ],
     },
     {
       label: '[Chorus]',
-      lines: [cues.finalChorus, ...chorusLines],
+      lines: [cues.finalChorus, ...finalChorusLines],
     },
     {
       label: '[Outro]',
       lines: [
         cues.outro,
-        `${title}, let it breathe`,
+        outros[0],
         outros[1] ?? outros[0],
       ],
     },
@@ -386,7 +471,7 @@ export function generateOfflineSong(
   return { title, lyrics: serialize(sections) };
 }
 
-// ──────────────────────── ACE Music Native Songwriter ────────────────────────
+// ──────────────────────── ACE Music v1 Native Songwriter ────────────────────────
 
 interface AceHookPair {
   title: string;
@@ -398,7 +483,7 @@ interface AceHookPair {
   followUpStatements: [string, string, string];
 }
 
-function buildAceHook(topic: string, rng: Rng): AceHookPair {
+function buildAceHook(topic: string, bank: ImageryBank, rng: Rng): AceHookPair {
   const lower = topic.toLowerCase();
 
   if (/\btoo quiet\b|\bpeace feels\b|\bcan'?t sleep when it'?s quiet\b/.test(lower)) {
@@ -441,7 +526,7 @@ function buildAceHook(topic: string, rng: Rng): AceHookPair {
     };
   }
 
-  if (/\bman enough\b|\benough\b/.test(lower)) {
+  if (/\bman enough\b|\bnot ready\b|\benough\b/.test(lower)) {
     return {
       title: 'Still Enough',
       question: 'Am I still enough',
@@ -461,7 +546,27 @@ function buildAceHook(topic: string, rng: Rng): AceHookPair {
     };
   }
 
-  if (/\bleave\b|\bletting go\b|\bgoodbye\b|\blost\b|\bheartbreak\b/.test(lower)) {
+  if (/\bfather\b|\bnewborn\b|\bcar seat\b|\bdad\b/.test(lower)) {
+    return {
+      title: 'Hands on the Wheel',
+      question: 'Will I be the shelter you never have to doubt',
+      echo: 'never have to doubt',
+      statement: 'I will be the shelter you never have to doubt',
+      bridgeQuestion: 'How do you give a warmth nobody taught you how to hold?',
+      followUpQuestions: [
+        'Driving slow at three a.m. with your whole future in the back?',
+        'Breaking every old cycle before it reaches your door?',
+        'Learning how to stay calm when my own hands shake?',
+      ],
+      followUpStatements: [
+        'Driving slow at three a.m. with your whole future in the back',
+        'The old cycle ends tonight right here at my door',
+        'You will only know the steady version of my voice',
+      ],
+    };
+  }
+
+  if (/\bleave\b|\bletting go\b|\bgoodbye\b|\blost\b|\bheartbreak\b|\bghosted\b/.test(lower)) {
     return {
       title: 'Still Standing Here',
       question: 'Are we still standing here',
@@ -481,64 +586,47 @@ function buildAceHook(topic: string, rng: Rng): AceHookPair {
     };
   }
 
-  const coreTitle = makeTitle(topic, rng);
-  const shortEcho = coreTitle.toLowerCase();
   return {
-    title: coreTitle,
-    question: `Is it ${shortEcho}`,
-    echo: shortEcho,
-    statement: `It is ${shortEcho}`,
-    bridgeQuestion: 'What if the answer was inside us all along?',
-    followUpQuestions: [
-      'When the lights go low and the truth speaks up?',
-      'When the weight gets heavy in the middle of the night?',
-      'When we drop the armor and just say it plain?',
-    ],
-    followUpStatements: [
-      'Now the lights are low and the truth speaks clear',
-      'Even when the weight gets heavy in the night',
-      'We can drop the armor and just say it plain',
-    ],
+    title: makeTitle(topic, bank, rng),
+    ...bank.hook,
   };
 }
 
 /**
- * Generates a complete ACE Music native-format song:
- * - Vocal gender markers on every section tag ([Verse 1: male] / [Verse 1: female])
- * - Cold open (voice starts at 0:00 or after a brief instrumental under ~15s)
- * - Standalone bracketed production/delivery directions + optional trailing cues
- * - Backing vocal echoes in parentheses (...) only
- * - Full 10-section structure (Intro, Verse 1, Pre-Chorus, Chorus, Verse 2,
- *   Pre-Chorus, Chorus, Bridge, Final Chorus, Outro)
- * - Chorus carries the title as a QUESTION; Bridge changes the question;
- *   Final Chorus flips it to a STATEMENT; Outro mirrors the Intro.
+ * Generates a complete ACE Music v1 native-format vocal song:
+ *   - Strict Cold Open: begins IMMEDIATELY with [Verse 1: male|female] — zero vocal
+ *     intro, zero opening ad-libs/hums, zero title chants.
+ *   - Respects Artist vocal identity independently from Producer genre.
+ *   - In A Cappella mode, uses ONLY vocal directions (zero instrument/beat cues).
+ *   - Returns empty lyrics in Instrumental and No Selection modes.
  */
 export function generateAceOfflineSong(
   topicRaw: string,
   spec: SoundSpec,
   rng: Rng,
 ): { title: string; lyrics: string } {
+  if (spec.mode === 'instrumental' || spec.mode === 'none' || !spec.voice || !spec.gender) {
+    return { title: '', lyrics: '' };
+  }
+
   const topic = cleanTopic(topicRaw);
   const g = spec.gender;
   const tag = (name: string) => `[${name}: ${g}]`;
-  const hook = buildAceHook(topic, rng);
   const bank = BANKS[spec.mood.palette];
+  const hook = buildAceHook(topic, bank, rng);
 
   const settings = rng.shuffle(bank.settings);
   const details = rng.shuffle(bank.details);
   const turns = rng.shuffle(bank.turns);
   const outros = rng.shuffle(bank.outros);
 
-  const leadInst = spec.persona.sound.instruments?.[0] ?? 'warm Rhodes chords';
-  const drumCue = spec.persona.sound.drums?.[0] ?? 'crisp, laid-back drum groove';
-  const bassCue = spec.persona.sound.bass?.[0] ?? 'deep controlled bass';
-
-  const isRapVoice = spec.voice.category === 'rap';
-  const isPureRap = spec.isRap && spec.flowMode.id !== 'melodic-rap';
+  const isAcappella = spec.mode === 'acappella';
+  const isRapArtist = spec.isRap; // strictly voice.category === 'rap'
+  const isPureRap = isRapArtist && spec.flowMode.id !== 'melodic-rap';
 
   const peakCue = isPureRap
     ? '[Lead rap delivery locks into sharp, emphatic cadence with crisp internal rhymes, no singing]'
-    : isRapVoice
+    : isRapArtist
       ? '[Melodic rap hook opens vowels on the key phrase with tight rhythmic doubles]'
       : spec.voice.id === 'voc-fem-4'
         ? '[Lead vocal carries full, seamless mixed voice into the upper range with no break, intentional run on the key word]'
@@ -548,45 +636,81 @@ export function generateAceOfflineSong(
             ? '[Lead vocal rises into clean, controlled whistle-register peaks with space to breathe]'
             : spec.voice.id === 'voc-fem-3'
               ? '[Lead contralto holds deep, smoky velvet weight across the open vowels of the hook]'
-              : '[Lead vocal shifts into a strong, steady falsetto with one purposeful gospel run landing on the title phrase]';
+              : '[Lead vocal shifts into a strong, steady falsetto with one purposeful gospel run landing on the key phrase]';
 
-  const lowCue = spec.isRap
-    ? spec.flowMode.aceVerse1Cue
-    : spec.voice.gender === 'female'
-      ? '[Warm, grounded low register inside the pocket, intimate and conversational with space to breathe]'
-      : '[Warm, seasoned chest voice inside the pocket, intimate and conversational with space to breathe]';
+  const verse1Cue = isRapArtist
+    ? isAcappella
+      ? '[Unaccompanied close-mic rap entry, crisp articulation and elastic pocket]'
+      : spec.flowMode.aceVerse1Cue
+    : isAcappella
+      ? `[Unaccompanied close-mic ${g} vocal, warm low register, intimate and conversational]`
+      : spec.voice.gender === 'female'
+        ? '[Warm, grounded low register inside the pocket, intimate and conversational with space to breathe]'
+        : '[Warm, seasoned chest voice inside the pocket, intimate and conversational with space to breathe]';
 
-  const verse2DeliveryCue = spec.isRap
-    ? spec.flowMode.aceVerse2Cue
-    : '[Restrained background harmonies warm the edges without crowding the lead pocket]';
+  const verse2Cue = isRapArtist
+    ? isAcappella
+      ? '[Unaccompanied cadence tightens with crisp internal rhymes and natural breath pockets]'
+      : spec.persona?.id === 'soulswitch'
+        ? '[Beat switch: tape-stop drops into hard trap pocket; rap cadence accelerates cleanly]'
+        : spec.flowMode.aceVerse2Cue
+    : isAcappella
+      ? '[Intimate solo vocal leans forward with subtle dynamic lift and clean phrasing]'
+      : spec.persona?.id === 'soulswitch'
+        ? '[Beat switch hits beneath; soulful sung vocal stays poised and expressive over the heavier groove]'
+        : '[Restrained background harmonies warm the edges without crowding the lead vocal]';
 
-  const introDirection = isPureRap
-    ? `[Cold open: brief ${leadInst} under 10 seconds, dry close-mic ${g} rap entry]`
-    : `[Cold open: brief ${leadInst} under 10 seconds with soft, unhurried ${g} vocal hum]`;
+  const chorus1Cue = isPureRap
+    ? isAcappella
+      ? '[Emphatic unaccompanied rap hook with crisp rhythmic focus]'
+      : '[Lead rap hook steps forward cleanly over the groove with tight doubles]'
+    : isAcappella
+      ? '[Restrained emotional release, unaccompanied lead vocal open and clear]'
+      : '[Restrained emotional release: lead vocal opens up cleanly inside the pocket]';
 
-  const chorus1Direction = isPureRap
-    ? `[Full ${drumCue} hits with ${bassCue}; lead rap hook forward with crisp doubles]`
-    : `[Restrained emotional release: ${drumCue} settles into the pocket with ${bassCue}, lead vocal open and clear]`;
+  const chorus2Cue = isPureRap
+    ? isAcappella
+      ? '[Higher vocal intensity and tighter cadence on the second hook]'
+      : '[Higher intensity rap hook with tight stacked doubles]'
+    : isAcappella
+      ? '[Fuller vocal release with warm self-harmonized lift]'
+      : '[Fuller release: purposeful background harmonies lift the lead vocal]';
 
-  const chorus2Direction = isPureRap
-    ? `[Heavy ${drumCue} and tight stacked rap doubles punch back in with higher intensity]`
-    : `[Fuller release: ${drumCue} deepens as purposeful background harmonies lift the lead vocal]`;
+  const finalChorusCue = isPureRap
+    ? isAcappella
+      ? '[Climax: commanding unaccompanied rap hook with sharp enunciation]'
+      : '[Climax: hard-hitting full-energy rap hook with emphatic ad-lib echoes in the pocket]'
+    : isAcappella
+      ? '[Peak emotional release: exposed chest-to-falsetto unaccompanied vocal moment]'
+      : '[Peak emotional release: exposed chest-to-falsetto replay moment with purposeful harmonies and spontaneous ad-libs in the gaps]';
 
-  const finalChorusDirection = isPureRap
-    ? '[Climax: hard-hitting full-energy rap hook with emphatic ad-lib echoes in the pocket]'
-    : '[Peak emotional release: exposed chest-to-falsetto replay moment with purposeful harmonies and spontaneous ad-libs in the gaps]';
+  const bridgeCue1 = isPureRap
+    ? isAcappella
+      ? '[Stark, hushed spoken-rap cadence, slow and deliberate]'
+      : '[Arrangement pulls back; stark, focused spoken-rap turn]'
+    : isAcappella
+      ? '[Raw whisper-to-chest unaccompanied confession, letting the breath show]'
+      : '[Arrangement thins out; raw whisper-to-chest confession, letting the breath show]';
 
-  const bridgeDirection1 = isPureRap
-    ? '[Beat strips back to sparse bass and percussion; stark, focused spoken-rap turn]'
-    : '[Music strips back to sparse chords and deep sub bass; raw whisper-to-chest confession, letting the breath show]';
+  const bridgeCue2 = isPureRap
+    ? '[Cadence tightens bar by bar, driving into the final hook]'
+    : '[Harmonies swell gently behind one sustained open-vowel phrase]';
 
-  const bridgeDirection2 = isPureRap
-    ? '[Cadence tightens bar by bar, building straight into the final hook drop]'
-    : '[Purposeful background harmonies swell behind one sustained open-vowel line]';
+  const outroCue = isPureRap
+    ? isAcappella
+      ? '[Voice drops to a calm, final unaccompanied cadence]'
+      : '[Delivery pulls back calmly as the arrangement fades out]'
+    : isAcappella
+      ? '[Soft, exposed final vocal phrase fading into quiet room air]'
+      : '[Arrangement softens into space with one lingering, honest vocal breath]';
 
-  const outroDirection = isPureRap
-    ? `[Drums strip back to ${leadInst} and fading bass, mirroring the cold open]`
-    : `[Drums and bass fade out, mirroring the intro with warm ${leadInst} and one lingering, honest breath]`;
+  const preCue1 = isPureRap
+    ? '[Cadence leans forward, building tension into the hook]'
+    : '[Melody climbs gently with open vowels into the chorus]';
+
+  const preCue2 = isPureRap
+    ? '[Brief vocal pause before snapping back into the hook]'
+    : '[Soft breath pause before lifting back into the chorus]';
 
   const verse1TurnCue = isPureRap
     ? '[Poetic turn: dense internal rhyme pattern breaks into two stark, direct landing lines]'
@@ -599,118 +723,85 @@ export function generateAceOfflineSong(
     hook.followUpQuestions[1],
     peakCue,
     hook.followUpQuestions[2],
-    `Tell me now (${hook.question}?)`,
-    'If I finally let it show',
+    'Tell me the truth right now',
+    'Before the silence answers for us',
   ];
 
-  const chorus1Block = [chorus1Direction, ...chorusBody];
-  const chorus2Block = [chorus2Direction, ...chorusBody];
-
   const finalChorusBlock = [
-    finalChorusDirection,
-    `${hook.statement} (${hook.question}?)`,
-    `(${hook.echo}) ${hook.followUpStatements[0]}`,
+    finalChorusCue,
+    `${hook.statement} (${hook.echo})`,
+    hook.followUpStatements[0],
     `${hook.statement} (${hook.echo})`,
     hook.followUpStatements[1],
     peakCue,
     `${hook.followUpStatements[2]} (${hook.echo})`,
-    `Yeah, ${hook.statement.toLowerCase()}`,
-    'And I do not have to hide no more',
+    'No more hiding what was always real',
   ];
-
-  const topicLine =
-    /\bworth it\b|\bhard years\b|\byounger self\b/i.test(topic)
-      ? 'Talking to my younger self, telling him the hard years were worth it'
-      : spec.perspective?.id === 'second-person'
-        ? `You still carry ${hook.title.toLowerCase()} every time the room goes still`
-        : spec.perspective?.id === 'third-person'
-          ? `They still carry ${hook.title.toLowerCase()} every time the room goes still`
-          : spec.perspective?.id === 'collective-we'
-            ? `We still carry ${hook.title.toLowerCase()} everywhere the road takes us`
-            : topic.split(/\s+/).length <= 5
-              ? `Thinking back on ${topic.toLowerCase()}`
-              : `Carrying the whole weight of ${hook.title.toLowerCase()} in my chest`;
 
   const sections: Section[] = [
     {
-      label: tag('Intro'),
-      lines: [
-        introDirection,
-        hook.title,
-        isPureRap ? 'Yeah, listen' : 'Mmm',
-        `${hook.title} (${hook.echo})`,
-      ],
-    },
-    {
       label: tag('Verse 1'),
       lines: [
-        `[${drumCue.charAt(0).toUpperCase() + drumCue.slice(1)} enters with ${bassCue}]`,
-        lowCue,
+        verse1Cue,
         settings[0],
-        topicLine,
         details[0],
         details[1],
-        verse1TurnCue,
         settings[1],
-        'I kept my head down and my promise tight',
-        'Never knew how far a quiet prayer could carry through the night',
+        verse1TurnCue,
+        'You kept your head down and your promise tight',
+        'Never knew how far one honest word could carry through the night',
       ],
     },
     {
       label: tag('Pre-Chorus'),
       lines: [
-        isPureRap
-          ? `[Percussion tightens over ${leadInst}, building tension into the hook]`
-          : `[Sustained warm pads and gentle ${leadInst} open up an intimate pocket, melody climbing]`,
-        'Maybe the hard road was never meant to break me',
-        'Maybe every heavy hour was shaping who I had to be',
-        'Look back at the mirror and tell the truth out loud [Snare roll build-up]',
+        preCue1,
+        'Maybe the hard road was never meant to break you',
+        'Maybe every heavy hour was shaping what stayed true',
+        'Look back at the mirror and say it out loud',
       ],
     },
     {
       label: tag('Chorus'),
-      lines: chorus1Block,
+      lines: [chorus1Cue, ...chorusBody],
     },
     {
       label: tag('Verse 2'),
       lines: [
-        spec.persona.id === 'soulswitch'
-          ? '[Beat switch: tape-stop silence explodes into heavy 808 slides and sharp trap percussion]'
-          : `[Instrumentation strips back to tight ${drumCue} and sparse ${leadInst}]`,
+        verse2Cue,
         settings[2],
         details[2],
-        `If I could sit across from who I was before`,
+        'If you could sit across from who you were before',
         details[3],
-        verse2DeliveryCue,
         settings[3],
-        'I would tell that kid to keep his heart unhardened',
-        'Every single scar we earned is turning into gold tonight',
+        'You would tell that version to keep an open heart',
+        'Every quiet scar we carried taught us how to stand',
       ],
     },
     {
       label: tag('Pre-Chorus'),
       lines: [
-        `[Drums drop out briefly, leaving only ${leadInst} and atmospheric space]`,
-        'Maybe the hard road was never meant to break me',
-        'Maybe every heavy hour was shaping who I had to be',
-        'Take a breath and let the whole room hear it clear [Drum fill build-up]',
+        preCue2,
+        'Maybe the hard road was never meant to break you',
+        'Maybe every heavy hour was shaping what stayed true',
+        'Take a breath and let the whole room hear it clear',
       ],
     },
     {
       label: tag('Chorus'),
-      lines: chorus2Block,
+      lines: [chorus2Cue, ...chorusBody],
     },
     {
       label: tag('Bridge'),
       lines: [
-        bridgeDirection1,
+        bridgeCue1,
         hook.bridgeQuestion,
         turns[0],
         'What if the waiting was the gift we did not recognize?',
-        bridgeDirection2,
+        bridgeCue2,
         turns[1] ?? turns[0],
-        'I am not asking for permission anymore',
-        'I already lived the answer [Full band swell into final chorus]',
+        'Not asking for permission anymore',
+        'Already lived the answer',
       ],
     },
     {
@@ -720,17 +811,14 @@ export function generateAceOfflineSong(
     {
       label: tag('Outro'),
       lines: [
-        outroDirection,
-        hook.title,
-        isPureRap ? 'Still here' : 'Mmm',
-        `${outros[0]} (${hook.echo})`,
-        hook.title,
-        '[Final chord resonates and fades to silence]',
+        outroCue,
+        outros[0],
+        `${outros[1] ?? outros[0]} (${hook.echo})`,
+        outros[2] ?? outros[0],
       ],
     },
   ];
 
-  // ACE native format uses single newlines between sections (compact like the reference example).
   const lyrics = sections.map((s) => [s.label, ...s.lines].join('\n')).join('\n');
   return { title: hook.title, lyrics };
 }

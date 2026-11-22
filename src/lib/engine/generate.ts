@@ -1,18 +1,11 @@
 /**
- * Main song + style/sound prompt orchestrator.
+ * Main song + STYLE / Sound Prompt orchestrator.
  *
- * The selected Producer Persona defines the genre and sonic architecture;
- * Mood and Tempo steer emotional feel, key mode, and BPM.
- *
- * Default target: ACE Music (v1 / v1.1 Preview, Custom mode)
- *   - Lyrics cap: 5,000 chars (native section tags with vocal marker, standalone
- *     direction lines, echoes in parentheses, full 10-section structure)
- *   - Style cap: 1,000 chars (one flowing prose paragraph ending verbatim with
- *     the natural human vocal guardrail)
- *
- * Secondary target: Flow Music / Mozart AI
- *   - Lyrics cap: 3,000 chars
- *   - Sound prompt cap: 1,000 chars
+ * Enforces strict Artist & Producer independence across all four creation modes:
+ *   - 'full'         (Artist + Producer) — Full Song: Production + Vocals + Vocal Lyrics
+ *   - 'instrumental' (Producer only)     — Instrumental: Production-only STYLE, zero vocal lyrics
+ *   - 'acappella'    (Artist only)       — A Cappella: Vocals-only STYLE, unaccompanied cold-open lyrics
+ *   - 'none'         (Neither selected)  — No Selection: empty STYLE & LYRICS (never invents defaults)
  */
 import {
   getFlowMode,
@@ -21,9 +14,9 @@ import {
   resolveTechniques,
 } from '@/data/craftLibrary';
 import { getMood } from '@/data/moods';
-import { getPersona, type ProducerPersona } from '@/data/producerPersonas';
+import { findPersona, type ProducerPersona } from '@/data/producerPersonas';
 import { resolveTempo } from '@/data/tempos';
-import { getVoice } from '@/data/voicePresets';
+import { findVoice } from '@/data/voicePresets';
 import { DEFAULT_TARGET, LIMITS, TARGETS } from './limits';
 import {
   parseModelOutput,
@@ -40,7 +33,12 @@ import {
   validateAceStyle,
   validateSoundPrompt,
 } from './soundPrompt';
-import type { GenerationResult, Selection, SoundSpec } from './types';
+import {
+  resolveCreationMode,
+  type GenerationResult,
+  type Selection,
+  type SoundSpec,
+} from './types';
 
 const MINOR_KEYS = [
   'C minor', 'C# minor', 'D minor', 'Eb minor', 'E minor', 'F minor',
@@ -71,31 +69,40 @@ export function buildSoundSpec(selection: Selection, seed: number): SoundSpec {
   const target = selection.target ?? DEFAULT_TARGET;
   const mood = getMood(selection.moodId);
   const tempo = resolveTempo(selection.tempoId);
-  const persona = getPersona(selection.personaId);
-  const voice = getVoice(selection.voiceId);
+  const persona = findPersona(selection.personaId);
+  const voice = findVoice(selection.voiceId);
+  const mode = resolveCreationMode(persona?.id, voice?.id);
 
-  const [minBpm, maxBpm] = tempo.bpm ?? inferPersonaBpm(persona);
-  const rawBpm =
-    minBpm === maxBpm ? minBpm : rng.int(minBpm, maxBpm) + (tempo.bpm ? 0 : mood.bpmShift);
-  const bpm = Math.max(minBpm, Math.min(maxBpm, rawBpm));
+  let bpm: number | undefined;
+  let switchBpm: number | undefined;
+  let key: string | undefined;
 
-  const switchBpm = persona.sound.switchBpm
-    ? rng.int(persona.sound.switchBpm[0], persona.sound.switchBpm[1])
-    : undefined;
+  if (persona) {
+    const [minBpm, maxBpm] = tempo.bpm ?? inferPersonaBpm(persona);
+    const rawBpm =
+      minBpm === maxBpm ? minBpm : rng.int(minBpm, maxBpm) + (tempo.bpm ? 0 : mood.bpmShift);
+    bpm = Math.max(minBpm, Math.min(maxBpm, rawBpm));
 
-  const mode =
-    persona.sound.mode ??
-    (mood.mode === 'either' ? (rng.chance(0.55) ? 'minor' : 'major') : mood.mode);
+    switchBpm = persona.sound.switchBpm
+      ? rng.int(persona.sound.switchBpm[0], persona.sound.switchBpm[1])
+      : undefined;
 
-  const key = mode === 'minor' ? rng.pick(MINOR_KEYS) : rng.pick(MAJOR_KEYS);
+    const keyMode =
+      persona.sound.mode ??
+      (mood.mode === 'either' ? (rng.chance(0.55) ? 'minor' : 'major') : mood.mode);
+    key = keyMode === 'minor' ? rng.pick(MINOR_KEYS) : rng.pick(MAJOR_KEYS);
+  } else if (mode === 'acappella' && tempo.bpm) {
+    // Only apply BPM in A Cappella if the user explicitly selected a non-Auto tempo.
+    const [minBpm, maxBpm] = tempo.bpm;
+    bpm = minBpm === maxBpm ? minBpm : rng.int(minBpm, maxBpm);
+  }
 
-  const isRap =
-    voice.category === 'rap' ||
-    (/\b(rap|boom-bap|trap)\b/i.test(persona.sound.dna) && !/\br&b\b/i.test(persona.sound.dna));
+  // Strictly Artist-owned vocal performance identity. Producer NEVER overrides Artist.
+  const isRap = voice?.category === 'rap';
 
-  // Per voice-presets.md: non-Soul Glider opener applies on Flow / Mozart target only.
-  const isSoulGliderTrack = persona.id === 'p36';
-  const includeOpener = target === 'flow' && !isSoulGliderTrack;
+  // Flow / Mozart non-Soul Glider opener applies only when a non-REELZ Producer is active.
+  const isSoulGliderTrack = persona?.id === 'p36';
+  const includeOpener = target === 'flow' && Boolean(persona) && !isSoulGliderTrack;
 
   const perspective = resolvePerspective(selection.perspectiveId);
   const storytellingStyles = resolveStorytellingStyles(selection.storytellingIds);
@@ -103,12 +110,13 @@ export function buildSoundSpec(selection: Selection, seed: number): SoundSpec {
   const flowMode = getFlowMode(selection.flowModeId);
 
   return {
+    mode,
     target,
     mood,
     tempo,
     persona,
     voice,
-    gender: voice.gender,
+    gender: voice?.gender,
     isRap,
     bpm,
     switchBpm,
@@ -135,7 +143,37 @@ export async function generateSong(
   const spec = buildSoundSpec(selection, seed);
   const targetCfg = TARGETS[spec.target];
 
-  // 1. Style (ACE) or Sound Prompt (Flow / Mozart) — guaranteed ≤ 1,000 chars & zero banned names.
+  // Mode D: Neither selected — do not invent defaults or generate output.
+  if (spec.mode === 'none') {
+    const emptyLyricsVal =
+      spec.target === 'ace'
+        ? validateAceLyrics('', undefined, targetCfg.lyricsMax, 'none')
+        : validateLyrics('', targetCfg.lyricsMax, 'none');
+    const emptySoundVal =
+      spec.target === 'ace'
+        ? validateAceStyle('', targetCfg.styleMax, 'none')
+        : validateSoundPrompt('', targetCfg.styleMax, 'none');
+
+    return {
+      title: '',
+      lyrics: '',
+      soundPrompt: '',
+      spec,
+      report: {
+        mode: 'none',
+        target: spec.target,
+        engine: 'No Selection',
+        seed,
+        modelAttempts: 0,
+        lyricsRepaired: false,
+        soundTrimmed: [],
+        lyrics: emptyLyricsVal,
+        sound: emptySoundVal,
+      },
+    };
+  }
+
+  // 1. STYLE (ACE) or Sound Prompt (Flow / Mozart) — strictly <= 1,000 chars & zero banned names.
   const { prompt: soundPrompt, trimmed: soundTrimmed } =
     spec.target === 'ace'
       ? buildAceStyle(spec, targetCfg.styleMax)
@@ -143,19 +181,47 @@ export async function generateSong(
 
   const soundValidation =
     spec.target === 'ace'
-      ? validateAceStyle(soundPrompt, targetCfg.styleMax)
-      : validateSoundPrompt(soundPrompt, targetCfg.styleMax);
+      ? validateAceStyle(soundPrompt, targetCfg.styleMax, spec.mode)
+      : validateSoundPrompt(soundPrompt, targetCfg.styleMax, spec.mode);
 
-  // 2. Lyrics with validation & retry/repair loop.
+  // Mode B: Producer only (Instrumental) — zero vocal lyrics generated.
+  if (spec.mode === 'instrumental') {
+    const emptyLyricsVal =
+      spec.target === 'ace'
+        ? validateAceLyrics('', undefined, targetCfg.lyricsMax, 'instrumental')
+        : validateLyrics('', targetCfg.lyricsMax, 'instrumental');
+
+    return {
+      title: '',
+      lyrics: '',
+      soundPrompt,
+      spec,
+      report: {
+        mode: 'instrumental',
+        target: spec.target,
+        engine: 'Instrumental Style Engine',
+        seed,
+        modelAttempts: 0,
+        lyricsRepaired: false,
+        soundTrimmed,
+        lyrics: emptyLyricsVal,
+        sound: soundValidation,
+      },
+    };
+  }
+
+  // 2. Vocal modes ('full' or 'acappella'): Lyrics with Cold-Open validation & retry/repair loop.
+  const gender = spec.gender ?? 'male';
+
   const validateFn = (txt: string) =>
     spec.target === 'ace'
-      ? validateAceLyrics(txt, spec.gender, targetCfg.lyricsMax)
-      : validateLyrics(txt, targetCfg.lyricsMax);
+      ? validateAceLyrics(txt, gender, targetCfg.lyricsMax, spec.mode)
+      : validateLyrics(txt, targetCfg.lyricsMax, spec.mode);
 
   const repairFn = (txt: string) =>
     spec.target === 'ace'
-      ? repairAceLyrics(txt, spec.gender, targetCfg.lyricsMax)
-      : repairLyrics(txt, targetCfg.lyricsMax);
+      ? repairAceLyrics(txt, gender, targetCfg.lyricsMax, spec.mode)
+      : repairLyrics(txt, targetCfg.lyricsMax, spec.mode);
 
   let title = '';
   let lyrics = '';
@@ -196,6 +262,7 @@ export async function generateSong(
     soundPrompt,
     spec,
     report: {
+      mode: spec.mode,
       target: spec.target,
       engine: provider.name,
       seed,

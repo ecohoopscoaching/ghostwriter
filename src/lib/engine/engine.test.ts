@@ -39,9 +39,10 @@ import {
 } from './soundPrompt';
 
 describe('Preset libraries & defaults', () => {
-  it('defaults to ACE Music target and does NOT default Producer to REELZ', () => {
+  it('defaults to ACE Music target with NO default Artist and NO default Producer', () => {
     expect(DEFAULT_TARGET).toBe('ace');
     expect(DEFAULT_PERSONA_ID).toBe('');
+    expect(DEFAULT_VOICE_ID).toBe('');
     expect(DEFAULT_PERSONA_ID).not.toBe('p36');
   });
 
@@ -54,7 +55,7 @@ describe('Preset libraries & defaults', () => {
   });
 
   it('contains 32 deduplicated vocalists across 4 categories with zero duplicate prompts and accurate gender markers', () => {
-    expect(DEFAULT_VOICE_ID).toBe('seasoned-tenor');
+    expect(DEFAULT_VOICE_ID).toBe('');
     expect(VOICE_PRESETS).toHaveLength(32);
     expect(VOICE_PRESETS.filter((v) => v.category === 'tenor')).toHaveLength(5);
     expect(VOICE_PRESETS.filter((v) => v.category === 'baritone')).toHaveLength(4);
@@ -177,7 +178,8 @@ describe('ACE Music target (primary) — all 68 personas × 32 voices (2,176 com
       expect(charCount(res.soundPrompt)).toBeLessThanOrEqual(LIMITS.ACE_STYLE_MAX_CHARS);
 
       const g = voice.gender;
-      expect(res.lyrics).toContain(`[Intro: ${g}]`);
+      expect(res.lyrics.startsWith(`[Verse 1: ${g}]`), `${voice.name} must cold-open at Verse 1`).toBe(true);
+      expect(res.lyrics).not.toContain(`[Intro: ${g}]`);
       expect(res.lyrics).toContain(`[Verse 1: ${g}]`);
       expect(res.lyrics).toContain(`[Pre-Chorus: ${g}]`);
       expect(res.lyrics).toContain(`[Chorus: ${g}]`);
@@ -222,6 +224,8 @@ describe('ACE Music target (primary) — all 68 personas × 32 voices (2,176 com
     expect(charCount(oversized)).toBeGreaterThan(LIMITS.ACE_LYRICS_MAX_CHARS);
     const repaired = repairAceLyrics(oversized, 'male', LIMITS.ACE_LYRICS_MAX_CHARS);
     expect(charCount(repaired)).toBeLessThanOrEqual(LIMITS.ACE_LYRICS_MAX_CHARS);
+    expect(repaired.startsWith('[Verse 1: male]')).toBe(true);
+    expect(repaired).not.toContain('[Intro: male]');
     expect(repaired).toContain('[Bridge: male]');
     expect(repaired).toContain('[Final Chorus: male]');
     const check = validateAceLyrics(repaired, 'male', LIMITS.ACE_LYRICS_MAX_CHARS);
@@ -463,7 +467,7 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
         moodId: DEFAULT_MOOD_ID,
         tempoId: DEFAULT_TEMPO_ID,
         personaId: 'p36',
-        voiceId: DEFAULT_VOICE_ID,
+        voiceId: 'seasoned-tenor',
         target: 'ace',
       },
       7,
@@ -495,7 +499,7 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
               content: {
                 parts: [
                   {
-                    text: '```\nTITLE: Porch Light\n\n[Intro: male]\nYou left the key inside the bowl\n\n[Chorus: male]\nDo you still feel it when the house goes cold?\n```',
+                    text: '```\nTITLE: Porch Light\n\n[Verse 1: male]\nYou left the key inside the bowl\n\n[Chorus: male]\nDo you still feel it when the house goes cold?\n```',
                   },
                 ],
               },
@@ -518,7 +522,7 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
         moodId: DEFAULT_MOOD_ID,
         tempoId: DEFAULT_TEMPO_ID,
         personaId: 'p36',
-        voiceId: DEFAULT_VOICE_ID,
+        voiceId: 'seasoned-tenor',
         target: 'ace',
       },
       5,
@@ -534,8 +538,9 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
     expect(capturedUrl).not.toContain('AIzaTestSecretKey123');
     expect(capturedHeaders['x-goog-api-key']).toBe('AIzaTestSecretKey123');
     expect(capturedBody).toContain('THE R&B SONGWRITING RULEBOOK');
+    expect(capturedBody).toContain('GLOBAL COLD-OPEN RULE');
     expect(draft.title).toBe('Porch Light');
-    expect(draft.lyrics).toContain('[Intro: male]');
+    expect(draft.lyrics).toContain('[Verse 1: male]');
     expect(draft.lyrics).not.toContain('```');
 
     const badProvider = createGeminiProvider({
@@ -549,5 +554,249 @@ describe('Songwriting Craft Library & Mode-Aware Rulebook Prompts', () => {
         rng: { next: () => 0.5, int: (a) => a, pick: (arr) => arr[0], chance: () => false, shuffle: (a) => [...a] },
       }),
     ).rejects.toThrow(/Gemini rejected the API key/);
+  });
+});
+
+describe('Four Creation Modes, Artist/Producer Independence & Global Cold-Open Rule', () => {
+  it('Mode D (Neither selected): returns empty STYLE and empty LYRICS without inventing defaults', async () => {
+    const res = await generateSong(
+      {
+        topic: 'Becoming a father',
+        moodId: DEFAULT_MOOD_ID,
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: '',
+        voiceId: '',
+        target: 'ace',
+      },
+      { seed: 11 },
+    );
+    expect(res.spec.mode).toBe('none');
+    expect(res.spec.persona).toBeUndefined();
+    expect(res.spec.voice).toBeUndefined();
+    expect(res.soundPrompt).toBe('');
+    expect(res.lyrics).toBe('');
+    expect(res.title).toBe('');
+    expect(res.report.sound.ok).toBe(true);
+    expect(res.report.lyrics.ok).toBe(true);
+  });
+
+  it('Mode B (Producer only — Instrumental): all 68 producers produce <= 1,000-char instrumental-only STYLE and ZERO vocal lyrics', async () => {
+    for (const persona of PRODUCER_PERSONAS) {
+      const res = await generateSong(
+        {
+          topic: 'Late night drive',
+          moodId: 'reflective',
+          tempoId: DEFAULT_TEMPO_ID,
+          personaId: persona.id,
+          voiceId: '',
+          target: 'ace',
+        },
+        { seed: 33 },
+      );
+      expect(res.spec.mode).toBe('instrumental');
+      expect(res.spec.voice).toBeUndefined();
+      expect(res.lyrics, `${persona.name} instrumental must not generate vocal lyrics`).toBe('');
+      expect(res.title).toBe('');
+      expect(charCount(res.soundPrompt), `${persona.name} exceeded 1000 chars`).toBeLessThanOrEqual(
+        LIMITS.ACE_STYLE_MAX_CHARS,
+      );
+      expect(res.soundPrompt).not.toContain(ACE_VOCAL_GUARDRAIL);
+      expect(res.soundPrompt).toMatch(/instrumental-only/i);
+      expect(res.soundPrompt).toMatch(/no singing/i);
+      expect(findBannedNames(res.soundPrompt)).toEqual([]);
+      expect(res.report.sound.ok, `${persona.name}: ${JSON.stringify(res.report.sound.issues)}`).toBe(true);
+      expect(res.report.lyrics.ok, JSON.stringify(res.report.lyrics.issues)).toBe(true);
+    }
+  });
+
+  it('Mode C (Artist only — A Cappella): all 32 artists produce <= 1,000-char unaccompanied STYLE and immediate Verse 1 lyrics with zero instruments', async () => {
+    for (const voice of VOICE_PRESETS) {
+      const res = await generateSong(
+        {
+          topic: 'Holding your newborn at 3 AM',
+          moodId: 'reflective',
+          tempoId: DEFAULT_TEMPO_ID,
+          personaId: '',
+          voiceId: voice.id,
+          target: 'ace',
+        },
+        { seed: 44 },
+      );
+      expect(res.spec.mode).toBe('acappella');
+      expect(res.spec.persona).toBeUndefined();
+      expect(charCount(res.soundPrompt), `${voice.name} exceeded 1000 chars`).toBeLessThanOrEqual(
+        LIMITS.ACE_STYLE_MAX_CHARS,
+      );
+      expect(res.soundPrompt).toMatch(/a cappella/i);
+      expect(res.soundPrompt).not.toMatch(/\bProduction:/i);
+      expect(res.soundPrompt).not.toMatch(/fingerpicked acoustic guitar|warm bassline|brushed percussion/i);
+      expect(res.soundPrompt.endsWith(ACE_VOCAL_GUARDRAIL)).toBe(true);
+      expect(findBannedNames(res.soundPrompt)).toEqual([]);
+      expect(res.report.sound.ok, `${voice.name}: ${JSON.stringify(res.report.sound.issues)}`).toBe(true);
+
+      // Immediate cold open at Verse 1, zero [Instrumental Intro], zero instrument cues
+      expect(res.lyrics.startsWith(`[Verse 1: ${voice.gender}]`)).toBe(true);
+      expect(res.lyrics).not.toContain('[Instrumental Intro]');
+      expect(res.lyrics).not.toContain(`[Intro: ${voice.gender}]`);
+      expect(res.report.lyrics.ok, `${voice.name}: ${JSON.stringify(res.report.lyrics.issues)}`).toBe(true);
+    }
+  });
+
+  it('keeps Artist & Producer strictly independent across contrasting pairings (Hip-Hop Producer + R&B Singer, R&B Producer + Rapper, Salsa + Contralto)', async () => {
+    // 1. Hip-Hop Producer (SOULSWITCH) + R&B Tenor Singer
+    const hipHopPlusRnb = await generateSong(
+      {
+        topic: 'Forgiving someone you still cannot trust',
+        moodId: 'heartbroken',
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'soulswitch',
+        voiceId: 'seasoned-tenor',
+        target: 'ace',
+      },
+      { seed: 12 },
+    );
+    expect(hipHopPlusRnb.spec.mode).toBe('full');
+    expect(hipHopPlusRnb.spec.isRap).toBe(false); // Singer stays a singer!
+    expect(hipHopPlusRnb.soundPrompt).toMatch(/hip-hop|boom-bap|trap/i);
+    expect(hipHopPlusRnb.soundPrompt).toMatch(/tenor|falsetto/i);
+    expect(hipHopPlusRnb.lyrics).not.toMatch(/Lead rap delivery|Close-mic rap/i);
+    expect(hipHopPlusRnb.lyrics).toMatch(/falsetto|chest voice/i);
+    expect(hipHopPlusRnb.report.sound.ok).toBe(true);
+    expect(hipHopPlusRnb.report.lyrics.ok).toBe(true);
+
+    // 2. R&B Producer (REELZ p36) + Rapper
+    const rapVoice = VOICE_PRESETS.find((v) => v.category === 'rap')!;
+    const rnbPlusRap = await generateSong(
+      {
+        topic: 'Breaking family curses',
+        moodId: 'reflective',
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'p36',
+        voiceId: rapVoice.id,
+        target: 'ace',
+        flowModeId: 'rhythm-weaver',
+      },
+      { seed: 12 },
+    );
+    expect(rnbPlusRap.spec.mode).toBe('full');
+    expect(rnbPlusRap.spec.isRap).toBe(true); // Rapper stays a rapper!
+    expect(rnbPlusRap.soundPrompt).toMatch(/r&b|soul/i);
+    expect(rnbPlusRap.soundPrompt).toMatch(/rap/i);
+    expect(rnbPlusRap.lyrics).not.toMatch(/falsetto|gospel run|whistle/i);
+    expect(rnbPlusRap.lyrics).toMatch(/rap/i);
+    expect(rnbPlusRap.report.sound.ok).toBe(true);
+    expect(rnbPlusRap.report.lyrics.ok).toBe(true);
+
+    // 3. Cross-genre contrasting pair: Salsa Producer (p48) + Velvet-Gravel Contralto (voc-fem-3)
+    const salsaPlusContralto = await generateSong(
+      {
+        topic: 'Midnight confession',
+        moodId: 'romantic',
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'p48',
+        voiceId: 'voc-fem-3',
+        target: 'ace',
+      },
+      { seed: 12 },
+    );
+    expect(salsaPlusContralto.spec.isRap).toBe(false);
+    expect(salsaPlusContralto.soundPrompt).toMatch(/salsa|timba/i);
+    expect(salsaPlusContralto.soundPrompt).toMatch(/contralto/i);
+    expect(salsaPlusContralto.soundPrompt).not.toMatch(/Slow 68 BPM smoky feel/i); // Artist never overwrites Salsa tempo/production!
+    expect(salsaPlusContralto.spec.bpm).toBeGreaterThanOrEqual(168);
+    expect(salsaPlusContralto.report.sound.ok).toBe(true);
+    expect(salsaPlusContralto.report.lyrics.ok).toBe(true);
+  });
+
+  it('enforces the Global Cold-Open Rule: rejects forbidden [Intro: male] / ad-libs and strips them on repair, while allowing brief [Instrumental Intro] on Full Song only', () => {
+    const forbiddenIntroDraft = [
+      '[Intro: male]',
+      '[Cold open: brief dark minor chords]',
+      'Silencing the Voice Tonight',
+      'Yeah, listen',
+      'Silencing the Voice Tonight',
+      '[Verse 1: male]',
+      'Two in the morning and the hallway light is still on',
+      'I still reach for my phone before I remember the silence',
+      '[Pre-Chorus: male]',
+      'Maybe the quiet was never a trap',
+      '[Chorus: male]',
+      'Do you still hear it when the house goes quiet?',
+      '[Verse 2: male]',
+      'Your jacket sits on the chair by the door',
+      '[Pre-Chorus: male]',
+      'Maybe the quiet was never a trap',
+      '[Chorus: male]',
+      'Do you still hear it when the house goes quiet?',
+      '[Bridge: male]',
+      'When did holding on cost more than letting go?',
+      '[Final Chorus: male]',
+      'I finally breathe when the house goes quiet',
+      '[Outro: male]',
+      'Leave the porch light burning low',
+    ].join('\n');
+
+    const badCheck = validateAceLyrics(forbiddenIntroDraft, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'full');
+    expect(badCheck.ok).toBe(false);
+    expect(badCheck.issues.some((i) => i.code === 'FORBIDDEN_VOCAL_INTRO')).toBe(true);
+
+    const repaired = repairAceLyrics(forbiddenIntroDraft, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'full');
+    expect(repaired.startsWith('[Verse 1: male]')).toBe(true);
+    expect(repaired).not.toContain('Yeah, listen');
+    expect(repaired).not.toContain('Silencing the Voice Tonight');
+    expect(validateAceLyrics(repaired, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'full').ok).toBe(true);
+
+    // Optional Option B: [Instrumental Intro] allowed for Full Song, forbidden for A Cappella
+    const optionBDraft = [
+      '[Instrumental Intro]',
+      '[Dark piano chords, 2 bars, no vocals]',
+      '[Verse 1: male]',
+      'Two in the morning and the hallway light is still on',
+      '[Pre-Chorus: male]',
+      'Maybe the quiet was never a trap',
+      '[Chorus: male]',
+      'Do you still hear it when the house goes quiet?',
+      '[Verse 2: male]',
+      'Your jacket sits on the chair by the door',
+      '[Pre-Chorus: male]',
+      'Maybe the quiet was never a trap',
+      '[Chorus: male]',
+      'Do you still hear it when the house goes quiet?',
+      '[Bridge: male]',
+      'When did holding on cost more than letting go?',
+      '[Final Chorus: male]',
+      'I finally breathe when the house goes quiet',
+      '[Outro: male]',
+      'Leave the porch light burning low',
+    ].join('\n');
+
+    expect(validateAceLyrics(optionBDraft, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'full').ok).toBe(true);
+    const acapCheck = validateAceLyrics(optionBDraft, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'acappella');
+    expect(acapCheck.ok).toBe(false);
+    expect(acapCheck.issues.some((i) => i.code === 'INSTRUMENTAL_IN_ACAPPELLA')).toBe(true);
+
+    // Repair strips [Instrumental Intro] for A Cappella
+    const acapRepaired = repairAceLyrics(optionBDraft, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'acappella');
+    expect(acapRepaired.startsWith('[Verse 1: male]')).toBe(true);
+    expect(acapRepaired).not.toContain('[Instrumental Intro]');
+    expect(validateAceLyrics(acapRepaired, 'male', LIMITS.ACE_LYRICS_MAX_CHARS, 'acappella').ok).toBe(true);
+  });
+
+  it('does not mechanically stuff long topic prompts into unrelated lyric lines', async () => {
+    const res = await generateSong(
+      {
+        topic: 'Silencing the voice in your head that sounds like every person who underestimated you',
+        moodId: 'dark',
+        tempoId: DEFAULT_TEMPO_ID,
+        personaId: 'p1',
+        voiceId: 'seasoned-tenor',
+        target: 'ace',
+      },
+      { seed: 2026 },
+    );
+    expect(res.lyrics).not.toContain('Silencing the Voice Tonight');
+    expect(res.lyrics).not.toContain('Yeah, listen');
+    expect(res.lyrics.startsWith('[Verse 1: male]')).toBe(true);
+    expect(res.report.lyrics.ok).toBe(true);
   });
 });

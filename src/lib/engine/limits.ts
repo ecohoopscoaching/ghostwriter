@@ -62,7 +62,7 @@ export const LIMITS = {
 
 /** Simple, direct section labels allowed on Flow / Mozart. */
 export const SECTION_NAMES = [
-  'Intro',
+  'Instrumental Intro',
   'Verse',
   'Pre-Chorus',
   'Chorus',
@@ -76,17 +76,19 @@ export const SECTION_NAMES = [
 
 export type SectionName = (typeof SECTION_NAMES)[number];
 
-/** Matches a Flow / Mozart label line, e.g. "[Verse 2]" or "[Pre-Chorus]". */
+/** Matches a Flow / Mozart label line, e.g. "[Verse 2]" or "[Instrumental Intro]". */
 export const LABEL_LINE_RE =
-  /^\[(Intro|Verse(?: [1-9])?|Pre-Chorus|Chorus|Post-Chorus|Hook|Bridge|Breakdown|Interlude|Outro)\]$/;
+  /^\[(Instrumental Intro|Intro|Verse(?: [1-9])?|Pre-Chorus|Chorus|Post-Chorus|Hook|Bridge|Breakdown|Interlude|Outro)\]$/;
 
-/** Matches an ACE native section tag with vocal marker, e.g. "[Verse 1: male]" or "[Final Chorus: female]". */
+/** Matches an optional ACE instrumental-only intro tag (1-2 bars, no vocals). */
+export const ACE_INSTRUMENTAL_INTRO_RE = /^\[Instrumental Intro\]$/;
+
+/** Matches an ACE native vocal section tag with vocal marker, e.g. "[Verse 1: male]" or "[Final Chorus: female]". */
 export const ACE_LABEL_LINE_RE =
-  /^\[(Intro|Verse(?: [1-9])?|Pre-Chorus|Chorus|Final Chorus|Post-Chorus|Bridge|Outro):\s*(male|female)\]$/;
+  /^\[(Verse(?: [1-9])?|Pre-Chorus|Chorus|Final Chorus|Post-Chorus|Bridge|Outro):\s*(male|female)\]$/;
 
-/** Required sections in a complete ACE song (every chorus written out in full). */
+/** Required vocal sections in a complete ACE vocal song (cold open at Verse 1; optional Instrumental Intro only). */
 export const ACE_REQUIRED_SEQUENCE = [
-  'Intro',
   'Verse 1',
   'Pre-Chorus',
   'Chorus',

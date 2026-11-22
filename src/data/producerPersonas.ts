@@ -909,8 +909,13 @@ export const PRODUCER_PERSONAS: ProducerPersona[] = [
   },
 ];
 
+export function findPersona(id?: string): ProducerPersona | undefined {
+  if (!id) return undefined;
+  return PRODUCER_PERSONAS.find((x) => x.id === id);
+}
+
 export function getPersona(id: string): ProducerPersona {
-  const p = PRODUCER_PERSONAS.find((x) => x.id === id);
+  const p = findPersona(id);
   if (!p) throw new Error(`Unknown producer persona: ${id}`);
   return p;
 }

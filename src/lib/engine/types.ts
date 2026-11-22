@@ -10,14 +10,38 @@ import type { TempoPreset } from '@/data/tempos';
 import type { VocalGender, VoicePreset } from '@/data/voicePresets';
 import type { OutputTarget } from './limits';
 
+/** Four creation modes based on independent Artist and Producer selections. */
+export type CreationMode = 'full' | 'instrumental' | 'acappella' | 'none';
+
+export const CREATION_MODE_LABELS: Record<CreationMode, string> = {
+  full: 'Full Song',
+  instrumental: 'Instrumental',
+  acappella: 'A Cappella',
+  none: 'No Selection',
+};
+
+export function resolveCreationMode(
+  personaId?: string | null,
+  voiceId?: string | null,
+): CreationMode {
+  const hasProducer = Boolean(personaId && personaId.trim());
+  const hasArtist = Boolean(voiceId && voiceId.trim());
+  if (hasProducer && hasArtist) return 'full';
+  if (hasProducer) return 'instrumental';
+  if (hasArtist) return 'acappella';
+  return 'none';
+}
+
 /** What the user picked on the screen. */
 export interface Selection {
   topic: string;
   moodId: string;
   /** Tempo preset ID (e.g. 'auto', 'slow-jam') or 'custom:<bpm>'. */
   tempoId: string;
-  personaId: string;
-  voiceId: string;
+  /** Independently optional Producer ID (empty string = no Producer selected). */
+  personaId?: string;
+  /** Independently optional Artist vocal ID (empty string = no Artist selected). */
+  voiceId?: string;
   /** Output target: 'ace' (default) or 'flow'. */
   target?: OutputTarget;
   /** Optional Songwriting Perspective ID (from 39 perspectives) or 'auto'. */
@@ -32,17 +56,23 @@ export interface Selection {
 
 /** The musical plan shared by the lyrics and the style/sound prompt. */
 export interface SoundSpec {
+  mode: CreationMode;
   target: OutputTarget;
   mood: Mood;
   tempo: TempoPreset;
-  persona: ProducerPersona;
-  voice: VoicePreset;
-  gender: VocalGender;
-  /** True when either the vocalist is a rap profile or the producer is rap-driven. */
+  /** Present in 'full' and 'instrumental' modes only. */
+  persona?: ProducerPersona;
+  /** Present in 'full' and 'acappella' modes only. */
+  voice?: VoicePreset;
+  /** Present in 'full' and 'acappella' modes only. */
+  gender?: VocalGender;
+  /** Determined strictly by the selected Artist (voice.category === 'rap'). Never overridden by Producer. */
   isRap: boolean;
-  bpm: number;
+  /** Present when Producer is selected or user explicitly chose a non-Auto tempo. */
+  bpm?: number;
   switchBpm?: number;
-  key: string;
+  /** Present when Producer is selected. */
+  key?: string;
   includeOpener: boolean;
   perspective?: SongPerspective;
   storytellingStyles: StorytellingStyle[];
@@ -63,6 +93,7 @@ export interface ValidationResult {
 }
 
 export interface GenerationReport {
+  mode: CreationMode;
   target: OutputTarget;
   engine: string;
   seed: number;

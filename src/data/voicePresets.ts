@@ -56,7 +56,8 @@ export const ACE_VOCAL_GUARDRAIL =
 export const NON_SOUL_GLIDER_OPENER =
   'IGNORE the Soul Glider Custom Instructions completely for this song. This is not Soul Glider.';
 
-export const DEFAULT_VOICE_ID = 'seasoned-tenor';
+/** No vocalist is pre-selected by default. */
+export const DEFAULT_VOICE_ID = '';
 
 const SEASONED_CUTTING_TENOR: VoicePreset = {
   id: 'seasoned-tenor',
@@ -447,8 +448,13 @@ export const VOICE_PRESETS: VoicePreset[] = [
   ...STUDIO_VAULT_VOCALS.map(vaultToPreset),
 ];
 
+export function findVoice(id?: string): VoicePreset | undefined {
+  if (!id) return undefined;
+  return VOICE_PRESETS.find((x) => x.id === id);
+}
+
 export function getVoice(id: string): VoicePreset {
-  const v = VOICE_PRESETS.find((x) => x.id === id);
+  const v = findVoice(id);
   if (!v) throw new Error(`Unknown voice preset: ${id}`);
   return v;
 }
